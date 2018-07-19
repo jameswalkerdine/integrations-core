@@ -64,7 +64,7 @@ class PrometheusScraperMixin(object):
 
         # `NAMESPACE` is the prefix metrics will have. Need to be hardcoded in the
         # child check class.
-        namespace = instance.get('namespace', None)
+        namespace = instance.get('namespace')
         # Check if we have a namespace
         if namespace is None:
             if self.default_namespace is None:
@@ -90,6 +90,9 @@ class PrometheusScraperMixin(object):
                 metrics_mapper[metric] = metric
             else:
                 metrics_mapper.update(metric)
+
+        if not metrics_mapper:
+            raise CheckException("You have to collect at least one metric from the endpoint: {}".format(endpoint))
 
         config['metrics_mapper'] = metrics_mapper
 
