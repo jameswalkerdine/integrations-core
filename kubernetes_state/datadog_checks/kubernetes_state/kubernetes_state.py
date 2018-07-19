@@ -83,14 +83,6 @@ class KubernetesState(GenericPrometheusCheck):
 
     def check(self, instance):
         endpoint = instance.get('kube_state_url')
-        if endpoint is None:
-            raise CheckException("Unable to find kube_state_url in config file.")
-
-        if 'labels_mapper' in instance:
-            if isinstance(instance['labels_mapper'], dict):
-                self.labels_mapper = instance['labels_mapper']
-            else:
-                self.log.warning("labels_mapper should be a dictionnary")
 
         # Job counters are monotonic: they increase at every run of the job
         # We want to send the delta via the `monotonic_count` method
@@ -109,6 +101,10 @@ class KubernetesState(GenericPrometheusCheck):
         """
         Set up the kubernetes_state instance so it can be used in GenericPrometheusCheck
         """
+        endpoint = instance.get('kube_state_url')
+        if endpoint is None:
+            raise CheckException("Unable to find kube_state_url in config file.")
+
         instance.update({
             'namespace': 'kubernetes_state',
             'metrics': [{
@@ -228,9 +224,12 @@ class KubernetesState(GenericPrometheusCheck):
             }
         })
 
-        instance['prometheus_url'] = instance.get('kube_state_url')
+        instance['prometheus_url'] = endpoint
         instance['label_joins'].update(extra_labels)
         instance['label_to_hostname'] = 'node' if hostname_override else None
+
+        if 'labels_mapper' in instance and not isinstance(instance['labels_mapper'], dict):
+                self.log.warning("Option labels_mapper should be a dictionary for {}".format(endpoint))
 
         return instance
 
@@ -259,7 +258,7 @@ class KubernetesState(GenericPrometheusCheck):
                 else:
                     self.log.debug("Unable to handle %s - unknown condition %s" % (sc_name, label.value))
 
-    def _condition_to_tag_check(self, metric, base_sc_name, mapping, tags=None):
+    def _condition_to_tag_check(self, metric, base_sc_name, mapping, scraper_config, tags=None):
         """
         Metrics from kube-state-metrics have changed
         For example:
@@ -283,11 +282,11 @@ class KubernetesState(GenericPrometheusCheck):
         mapping = condition_map['mapping']
 
         if base_sc_name == 'kubernetes_state.pod.phase':
-            message = "{} is currently reporting {}".format(self._label_to_tag('pod', metric.label),
-                                                            self._label_to_tag('phase', metric.label))
+            message = "{} is currently reporting {}".format(self._label_to_tag('pod', metric.label, scraper_config),
+                                                            self._label_to_tag('phase', metric.label, scraper_config))
         else:
-            message = "{} is currently reporting {}".format(self._label_to_tag('node', metric.label),
-                                                            self._label_to_tag('condition', metric.label))
+            message = "{} is currently reporting {}".format(self._label_to_tag('node', metric.label, scraper_config),
+                                                            self._label_to_tag('condition', metric.label, scraper_config))
 
         if condition_map['service_check_name'] is None:
             self.log.debug("Unable to handle {} - unknown condition {}".format(service_check_name, label_value))
@@ -338,14 +337,14 @@ class KubernetesState(GenericPrometheusCheck):
                 return label.value
         return None
 
-    def _format_tag(self, name, value):
+    def _format_tag(self, name, value, scraper_config):
         """
         Lookups the labels_mapper table to see if replacing the tag name is
         necessary, then returns a "name:value" tag string
         """
-        return '%s:%s' % (self.labels_mapper.get(name, name), value)
+        return '%s:%s' % (scraper_config['labels_mapper'].get(name, name), value)
 
-    def _label_to_tag(self, name, labels, tag_name=None):
+    def _label_to_tag(self, name, labels, scraper_config, tag_name=None):
         """
         Search for `name` in labels name and returns corresponding tag string.
         Tag name is label name if not specified.
@@ -353,7 +352,7 @@ class KubernetesState(GenericPrometheusCheck):
         """
         value = self._extract_label_value(name, labels)
         if value:
-            return self._format_tag(tag_name or name, value)
+            return self._format_tag(tag_name or name, value, scraper_config)
         else:
             return None
 
@@ -378,15 +377,15 @@ class KubernetesState(GenericPrometheusCheck):
         status_phase_counter = Counter()
 
         for metric in message.metric:
-            self._condition_to_tag_check(metric, check_basename, self.pod_phase_to_status,
-                                         tags=[self._label_to_tag("pod", metric.label),
-                                               self._label_to_tag("namespace", metric.label)] + scraper_config['custom_tags'])
+            self._condition_to_tag_check(metric, check_basename, self.pod_phase_to_status, scraper_config,
+                                         tags=[self._label_to_tag("pod", metric.label, scraper_config),
+                                               self._label_to_tag("namespace", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
             # Counts aggregated cluster-wide to avoid no-data issues on pod churn,
             # pod granularity available in the service checks
             tags = [
-                self._label_to_tag("namespace", metric.label),
-                self._label_to_tag("phase", metric.label)
+                self._label_to_tag("namespace", metric.label, scraper_config),
+                self._label_to_tag("phase", metric.label, scraper_config)
             ] + scraper_config['custom_tags']
             status_phase_counter[tuple(sorted(tags))] += metric.gauge.value
 
@@ -401,13 +400,13 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == "reason":
                     if label.value in WHITELISTED_WAITING_REASONS:
-                        tags.append(self._format_tag(label.name, label.value))
+                        tags.append(self._format_tag(label.name, label.value, scraper_config))
                     else:
                         skip_metric = True
                 elif label.name == "container":
-                    tags.append(self._format_tag("kube_container_name", label.value))
+                    tags.append(self._format_tag("kube_container_name", label.value, scraper_config))
                 elif label.name == "namespace":
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             if not skip_metric:
                 self.count(metric_name, metric.gauge.value, tags + scraper_config['custom_tags'])
 
@@ -419,13 +418,13 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == "reason":
                     if label.value in WHITELISTED_TERMINATED_REASONS:
-                        tags.append(self._format_tag(label.name, label.value))
+                        tags.append(self._format_tag(label.name, label.value, scraper_config))
                     else:
                         skip_metric = True
                 elif label.name == "container":
-                    tags.append(self._format_tag("kube_container_name", label.value))
+                    tags.append(self._format_tag("kube_container_name", label.value, scraper_config))
                 elif label.name == "namespace":
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             if not skip_metric:
                 self.count(metric_name, metric.gauge.value, tags + scraper_config['custom_tags'])
 
@@ -436,7 +435,7 @@ class KubernetesState(GenericPrometheusCheck):
         curr_time = int(time.time())
         for metric in message.metric:
             on_schedule = int(metric.gauge.value) - curr_time
-            tags = [self._format_tag(label.name, label.value) for label in metric.label] + scraper_config['custom_tags']
+            tags = [self._format_tag(label.name, label.value, scraper_config) for label in metric.label] + scraper_config['custom_tags']
             if on_schedule < 0:
                 message = "The service check scheduled at {} is {} seconds late".format(
                     time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(metric.gauge.value))), on_schedule
@@ -452,9 +451,9 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == 'job':
                     trimmed_job = self._trim_job_tag(label.value)
-                    tags.append(self._format_tag(label.name, trimmed_job))
+                    tags.append(self._format_tag(label.name, trimmed_job, scraper_config))
                 else:
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             self.service_check(service_check_name, self.OK, tags=tags + scraper_config['custom_tags'])
 
     def kube_job_failed(self, message, scraper_config):
@@ -464,9 +463,9 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == 'job':
                     trimmed_job = self._trim_job_tag(label.value)
-                    tags.append(self._format_tag(label.name, trimmed_job))
+                    tags.append(self._format_tag(label.name, trimmed_job, scraper_config))
                 else:
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             self.service_check(service_check_name, self.CRITICAL, tags=tags + scraper_config['custom_tags'])
 
     def kube_job_status_failed(self, message, scraper_config):
@@ -475,9 +474,9 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == 'job':
                     trimmed_job = self._trim_job_tag(label.value)
-                    tags.append(self._format_tag(label.name, trimmed_job))
+                    tags.append(self._format_tag(label.name, trimmed_job, scraper_config))
                 else:
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             self.job_failed_count[frozenset(tags)] += metric.gauge.value
 
     def kube_job_status_succeeded(self, message, scraper_config):
@@ -486,9 +485,9 @@ class KubernetesState(GenericPrometheusCheck):
             for label in metric.label:
                 if label.name == 'job':
                     trimmed_job = self._trim_job_tag(label.value)
-                    tags.append(self._format_tag(label.name, trimmed_job))
+                    tags.append(self._format_tag(label.name, trimmed_job, scraper_config))
                 else:
-                    tags.append(self._format_tag(label.name, label.value))
+                    tags.append(self._format_tag(label.name, label.value, scraper_config))
             self.job_succeeded_count[frozenset(tags)] += metric.gauge.value
 
     def kube_node_status_condition(self, message, scraper_config):
@@ -498,14 +497,14 @@ class KubernetesState(GenericPrometheusCheck):
         by_condition_counter = Counter()
 
         for metric in message.metric:
-            self._condition_to_tag_check(metric, base_check_name, self.condition_to_status_positive,
-                                         tags=[self._label_to_tag("node", metric.label)] + scraper_config['tags'])
+            self._condition_to_tag_check(metric, base_check_name, self.condition_to_status_positive, scraper_config,
+                                         tags=[self._label_to_tag("node", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
             # Counts aggregated cluster-wide to avoid no-data issues on node churn,
             # node granularity available in the service checks
             tags = [
-                self._label_to_tag("condition", metric.label),
-                self._label_to_tag("status", metric.label)
+                self._label_to_tag("condition", metric.label, scraper_config),
+                self._label_to_tag("status", metric.label, scraper_config)
             ] + scraper_config['custom_tags']
             by_condition_counter[tuple(sorted(tags))] += metric.gauge.value
 
@@ -517,21 +516,21 @@ class KubernetesState(GenericPrometheusCheck):
         service_check_name = scraper_config['NAMESPACE'] + '.node.ready'
         for metric in message.metric:
             self._condition_to_service_check(metric, service_check_name, self.condition_to_status_positive,
-                                             tags=[self._label_to_tag("node", metric.label)] + scraper_config['tags'])
+                                             tags=[self._label_to_tag("node", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
     def kube_node_status_out_of_disk(self, message, scraper_config):
         """ Whether the node is out of disk space (legacy)"""
         service_check_name = scraper_config['NAMESPACE'] + '.node.out_of_disk'
         for metric in message.metric:
             self._condition_to_service_check(metric, service_check_name, self.condition_to_status_negative,
-                                             tags=[self._label_to_tag("node", metric.label)] + scraper_config['custom_tags'])
+                                             tags=[self._label_to_tag("node", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
     def kube_node_status_memory_pressure(self, message, scraper_config):
         """ Whether the node is in a memory pressure state (legacy)"""
         service_check_name = scraper_config['NAMESPACE'] + '.node.memory_pressure'
         for metric in message.metric:
             self._condition_to_service_check(metric, service_check_name, self.condition_to_status_negative,
-                                             tags=[self._label_to_tag("node", metric.label)] + scraper_config['custom_tags'])
+                                             tags=[self._label_to_tag("node", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
     def kube_node_status_disk_pressure(self, message, scraper_config):
         """ Whether the node is in a disk pressure state (legacy)"""
@@ -545,7 +544,7 @@ class KubernetesState(GenericPrometheusCheck):
         service_check_name = scraper_config['NAMESPACE'] + '.node.network_unavailable'
         for metric in message.metric:
             self._condition_to_service_check(metric, service_check_name, self.condition_to_status_negative,
-                                             tags=[self._label_to_tag("node", metric.label)] + scraper_config['custom_tags'])
+                                             tags=[self._label_to_tag("node", metric.label, scraper_config)] + scraper_config['custom_tags'])
 
     def kube_node_spec_unschedulable(self, message, scraper_config):
         """ Whether a node can schedule new pods. """
@@ -553,9 +552,9 @@ class KubernetesState(GenericPrometheusCheck):
         statuses = ('schedulable', 'unschedulable')
         if message.type < len(METRIC_TYPES):
             for metric in message.metric:
-                tags = [self._format_tag(label.name, label.value) for label in metric.label] + scraper_config['custom_tags']
+                tags = [self._format_tag(label.name, label.value, scraper_config) for label in metric.label] + scraper_config['custom_tags']
                 status = statuses[int(getattr(metric, METRIC_TYPES[message.type]).value)]  # value can be 0 or 1
-                tags.append(self._format_tag('status', status))
+                tags.append(self._format_tag('status', status, scraper_config))
                 self.gauge(metric_name, 1, tags)  # metric value is always one, value is on the tags
         else:
             self.log.error("Metric type %s unsupported for metric %s" % (message.type, message.name))
@@ -569,8 +568,8 @@ class KubernetesState(GenericPrometheusCheck):
                 mtype = self._extract_label_value("type", metric.label)
                 resource = self._extract_label_value("resource", metric.label)
                 tags = [
-                    self._label_to_tag("namespace", metric.label),
-                    self._label_to_tag("resourcequota", metric.label)
+                    self._label_to_tag("namespace", metric.label, scraper_config),
+                    self._label_to_tag("resourcequota", metric.label, scraper_config)
                 ] + scraper_config['custom_tags']
                 val = getattr(metric, METRIC_TYPES[message.type]).value
                 self.gauge(metric_base_name.format(resource, suffixes[mtype]), val, tags)
@@ -601,9 +600,9 @@ class KubernetesState(GenericPrometheusCheck):
                     continue
                 resource = self._extract_label_value("resource", metric.label)
                 tags = [
-                    self._label_to_tag("namespace", metric.label),
-                    self._label_to_tag("limitrange", metric.label),
-                    self._label_to_tag("type", metric.label, tag_name="consumer_type")
+                    self._label_to_tag("namespace", metric.label, scraper_config),
+                    self._label_to_tag("limitrange", metric.label, scraper_config),
+                    self._label_to_tag("type", metric.label, scraper_config, tag_name="consumer_type")
                 ] + scraper_config['custom_tags']
                 val = getattr(metric, METRIC_TYPES[message.type]).value
                 self.gauge(metric_base_name.format(resource, constraint), val, tags)
