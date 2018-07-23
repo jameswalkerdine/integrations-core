@@ -137,7 +137,7 @@ def test_prometheus_default_instance(aggregator, poll_mock):
 
 def test_prometheus_mixed_instance(aggregator, poll_mock):
     """
-    Testing prometheus with default instance
+    Testing prometheus with a mixed of custom and default instance
     """
 
     c = PrometheusCheck(CHECK_NAME, None, {}, [], default_instances={
@@ -181,5 +181,5 @@ def test_prometheus_mixed_instance(aggregator, poll_mock):
             'tags': ['extra:foo']
         })
     aggregator.assert_metric(CHECK_NAME + '.renamed.metric1', hostname="host1", tags=['node:host1', 'flavor:test', 'matched_label:foobar', 'timestamp:123', 'extra:foo'], metric_type=aggregator.GAUGE)
-    aggregator.assert_metric(CHECK_NAME + '.metric2', hostname="host2", tags=['timestamp:123', 'node:host2', 'matched_label:foobar', 'timestamp:123', 'extra:foo'], metric_type=aggregator.GAUGE)
+    aggregator.assert_metric(CHECK_NAME + '.metric2', hostname="host2", tags=['timestamp:123', 'node:host2', 'matched_label:foobar', 'extra:foo'], metric_type=aggregator.GAUGE)
     assert aggregator.metrics_asserted_pct == 100.0
