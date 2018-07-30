@@ -82,15 +82,16 @@ def get_sql2014_instance():
 @pytest.fixture
 def get_linux_instance():
     return {
-        'host': HOST,
-        'username': 'sa',
-        'password': 'dd-ci',
+        'host': 'sqlserver_latest,1433',
+        'driver': "ODBC Driver 17 for SQL Server",
+        'username': 'SA',
+        'password': 'Password123',
     }
 
 
 @pytest.fixture(scope='session', autouse=True)
 def spin_up_sqlserver():
     with docker_run(
-        compose_file=os.path.join(HERE, 'compose', 'sqlserver.yaml'),
+        compose_file=os.path.join(HERE, 'compose', 'docker-compose.yaml'),
     ):
         yield

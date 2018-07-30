@@ -14,16 +14,5 @@ services:
     networks:
       - sqlservernet
 
-  agent:
-    build:
-      context: .
-    container_name: agent_sqlserver
-    volumes:
-      - ./sqlserver.yaml:/etc/datadog-agent/conf.d/sqlserver.d/sqlserver.yaml
-      # omnibus skips install (because we don't officially support linux yet)
-      - /Users/christine.chen/integrations-core/sqlserver:/home/sqlserver
-    networks:
-      - sqlservernet
-
 networks:
   sqlservernet: {}
