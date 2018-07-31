@@ -167,6 +167,8 @@ class KafkaCheck(AgentCheck):
         if instance_key not in self.kafka_clients:
             # While we check for SSL params, if not present they will default
             # to the kafka-python values for plaintext connections
+            # We check for SASL params, if not present they will default to
+            # the kafka-python defaults - ie no SASL
             cli = KafkaClient(bootstrap_servers=kafka_conn_str,
                               client_id='dd-agent',
                               security_protocol=instance.get('security_protocol', 'PLAINTEXT'),
@@ -174,7 +176,10 @@ class KafkaCheck(AgentCheck):
                               ssl_check_hostname=instance.get('ssl_check_hostname', True),
                               ssl_certfile=instance.get('ssl_certfile'),
                               ssl_keyfile=instance.get('ssl_keyfile'),
-                              ssl_password=instance.get('ssl_password'))
+                              ssl_password=instance.get('ssl_password'),
+                              sasl_mechanism=instance.get('sasl_mechanism'),
+                              sasl_plain_username=instance.get('sasl_plain_username'),
+                              sasl_plain_password=instance.get('sasl_plain_password'))
             self.kafka_clients[instance_key] = cli
 
         return self.kafka_clients[instance_key]
